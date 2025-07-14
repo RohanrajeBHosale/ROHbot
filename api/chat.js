@@ -29,7 +29,7 @@ module.exports = async (req, res) => {
             const { embedding } = await embeddingModel.embedContent(userInput);
             const { data: documents, error } = await supabase.rpc('match_documents', {
                 query_embedding: embedding.values,
-                match_threshold: 0.75, // Adjust this threshold as needed
+                match_threshold: 0.70, // Adjust this threshold as needed
                 match_count: 5
             });
 
