@@ -38,7 +38,7 @@ module.exports = async (req, res) => {
         // 3. Retrieve relevant documents from Supabase
         const { data: documents, error } = await supabase.rpc('match_documents', {
             query_embedding: embedding.values,
-            match_threshold: 0.70, // Keep this slightly lower threshold
+            match_threshold: 0.1, // Keep this slightly lower threshold
             match_count: 5,
         });
 
