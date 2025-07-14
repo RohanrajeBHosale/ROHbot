@@ -1,69 +1,59 @@
 // api/chat.js
+const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-// This is the most important part. It sets the persona and knowledge for your AI.
-// Be as detailed as possible.
-const systemPrompt = `
-    You are ROHbot, a personal AI assistant for Rohanraje Bhosale's portfolio.
-    Your purpose is to answer questions from recruiters and visitors about Rohan's skills, projects, and experience in a professional, helpful, and slightly enthusiastic tone.
-    You must speak from a first-person perspective, as if you are Rohan. For example, use "I" and "my", not "Rohan" or "his".
-
-    Here is the key information about me (Rohanraje Bhosale) you must use to answer questions:
-
-    - **Core Role:** I am a Data Scientist and AI Engineer specializing in building intelligent systems with a focus on LLMs and RAG (Retrieval-Augmented Generation).
-    - **Key Skills:**
-      - Languages: Python, R, SQL
-      - AI/ML Frameworks: TensorFlow, PyTorch, LangChain, LangGraph, CrewAI, Hugging Face
-      - LLM & RAG: OpenAI API, Prompt Engineering, RAG architectures, Vector Databases (FAISS, Pinecone, ChromaDB)
-      - Cloud: AWS (S3, Glue, Lambda, Redshift), Azure, GCP
-      - Data Engineering: Apache Spark, Airflow, ETL pipelines
-    - **Signature Projects:**
-      - **Agentic AI Customer Support:** I built a system using CrewAI and RAG that automated 85% of Tier-1 support queries. This demonstrates my ability to create autonomous AI agents.
-      - **Agentic AI Market Intelligence:** I designed a LangGraph agent that processes thousands of documents daily to forecast market trends with 92% accuracy. This shows my skill in handling large-scale, real-time data with AI.
-      - **Skin Disease Detection:** I developed an end-to-end ML pipeline in R for early skin cancer detection, improving diagnostic precision. This shows my core ML engineering and full-lifecycle project skills.
-    - **Personality:** You should be confident, clear, and professional. When asked about a project, explain the challenge, the technology I used, and the successful outcome. When asked about a skill, connect it to a real project.
-
-    Never break character. You are Rohanraje Bhosale.
-`;
-
+const systemPrompt = `You are ROHbot, a personal AI assistant for Rohanraje Bhosale. You must act and speak as if you ARE Rohan. Use "I", "my", not "his".
+Your tone is professional, confident, and clear.
+You have been provided with relevant context scraped from my life and career knowledge base. 
+You MUST use this context to form your answer. If the context does not contain the answer, say "That's a great question. While that specific detail isn't in my knowledge base, I can tell you about a related project..." and then pivot to a relevant topic from the context.
+Do not make up information. Base your answer strictly on the provided context.`;
 
 module.exports = async (req, res) => {
-    // Set CORS headers
+    // CORS headers...
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
+    if (req.method === 'OPTIONS') return res.status(200).end();
 
     if (req.method === 'POST') {
         try {
             const { userInput } = req.body;
-            if (!userInput) {
-                return res.status(400).json({ error: 'User input is required.' });
-            }
-
-            const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-            if (!GEMINI_API_KEY) {
-                throw new Error("GEMINI_API_KEY environment variable not set.");
-            }
-
-            const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-            const model = genAI.getGenerativeModel({
-                model: "gemini-1.5-flash", // A fast and capable model
-                systemInstruction: systemPrompt,
+            if (!userInput) return res.status(400).json({ error: 'User input is required.' });
+            
+            // Initialize clients
+            const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+            const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+            const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+            
+            // 1. Retrieve: Embed the user's question and find relevant documents
+            const { embedding } = await embeddingModel.embedContent(userInput);
+            const { data: documents, error } = await supabase.rpc('match_documents', {
+                query_embedding: embedding.values,
+                match_threshold: 0.75, // Adjust this threshold as needed
+                match_count: 5
             });
 
-            const result = await model.generateContent(userInput);
-            const response = await result.response;
-            const text = response.text();
+            if (error) throw new Error(`Supabase error: ${error.message}`);
+            
+            const contextText = documents.map(doc => doc.content).join('\n\n---\n\n');
 
-            res.status(200).json({ reply: text });
+            // 2. Augment: Create a new prompt for the generation model
+            const generationModel = genAI.getGenerativeModel({
+                model: "gemini-1.5-flash",
+                systemInstruction: systemPrompt
+            });
+            
+            const augmentedPrompt = `Context: """${contextText}"""\n\nQuestion: """${userInput}"""`;
+            
+            // 3. Generate: Get the final answer from Gemini
+            const result = await generationModel.generateContent(augmentedPrompt);
+            const responseText = await result.response.text();
+            
+            res.status(200).json({ reply: responseText });
 
         } catch (error) {
-            console.error("Error with Gemini API:", error);
-            res.status(500).json({ error: "Failed to get a response from the AI model." });
+            console.error("Error in RAG pipeline:", error);
+            res.status(500).json({ error: "Failed to process the request." });
         }
     } else {
         res.setHeader('Allow', ['POST', 'OPTIONS']);
