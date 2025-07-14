@@ -25,11 +25,19 @@ module.exports = async (req, res) => {
             const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
             const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
             
-            // 1. Retrieve: Embed the user's question and find relevant documents
-            const { embedding } = await embeddingModel.embedContent(userInput);
+            // --- NEW: Step 1a - Rewrite the query for better retrieval ---
+            const queryRewriterModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            const rewritePrompt = `Rewrite the following user query to be from a first-person perspective, as if the user is asking me (Rohan) directly. For example, 'tell me about his education' should become 'tell me about your education'. Just return the rewritten query and nothing else. Query: "${userInput}"`;
+            const rewriteResult = await queryRewriterModel.generateContent(rewritePrompt);
+            const rewrittenQuery = await rewriteResult.response.text();
+
+            console.log(`Original Query: "${userInput}" | Rewritten Query: "${rewrittenQuery}"`);
+
+            // --- Step 1b - Retrieve documents using the REWRITTEN query ---
+            const { embedding } = await embeddingModel.embedContent(rewrittenQuery);
             const { data: documents, error } = await supabase.rpc('match_documents', {
                 query_embedding: embedding.values,
-                match_threshold: 0.70, // Adjust this threshold as needed
+                match_threshold: 0.70, // We'll keep the lower threshold
                 match_count: 5
             });
 
@@ -37,17 +45,18 @@ module.exports = async (req, res) => {
             
             const contextText = documents.map(doc => doc.content).join('\n\n---\n\n');
 
-            // 2. Augment: Create a new prompt for the generation model
+            // 2. Augment: Create a new prompt for the final answer generation
             const generationModel = genAI.getGenerativeModel({
                 model: "gemini-1.5-flash",
                 systemInstruction: systemPrompt
             });
             
-            const augmentedPrompt = `Context: """${contextText}"""\n\nQuestion: """${userInput}"""`;
+            // We use the ORIGINAL user input here so the LLM knows the user's initial intent
+            const augmentedPrompt = `Context: """${contextText}"""\n\nBased on the context, answer this user's question: """${userInput}"""`;
             
             // 3. Generate: Get the final answer from Gemini
-            const result = await generationModel.generateContent(augmentedPrompt);
-            const responseText = await result.response.text();
+            const finalResult = await generationModel.generateContent(augmentedPrompt);
+            const responseText = await finalResult.response.text();
             
             res.status(200).json({ reply: responseText });
 
