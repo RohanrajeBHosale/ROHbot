@@ -8,7 +8,9 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
-    "axios": "^1.7.2"
+    "@supabase/supabase-js": "^2.51.0",
+    "axios": "^1.7.2",
+    "dotenv": "^17.2.0"
   },
   "author": "Rohanraje Bhosale",
   "license": "ISC"
