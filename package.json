@@ -1,10 +1,14 @@
 {
-  "name": "${PROJECT_NAME}",
+  "name": "rohbot-backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Backend for ROHbot TTS",
+  "main": "api/tts.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node api/tts.js"
   },
-  "private": true
+  "dependencies": {
+    "axios": "^1.7.2"
+  },
+  "author": "Rohanraje Bhosale",
+  "license": "ISC"
 }
