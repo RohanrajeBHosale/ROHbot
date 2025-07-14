@@ -5,7 +5,7 @@ module.exports = async (req, res) => {
     // Set CORS headers for all responses
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-control-allow-headers', 'Content-Type');
 
     // Handle the preflight OPTIONS request
     if (req.method === 'OPTIONS') {
@@ -28,34 +28,38 @@ module.exports = async (req, res) => {
             return res.status(500).send({ message: 'Server configuration error: Missing API Key.' });
         }
 
+        // --- THIS IS THE OPTIMIZED STREAMING CODE ---
         try {
             const response = await axios({
                 method: 'POST',
-                url: `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
+                url: `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}/stream`, // Use the /stream endpoint
                 data: {
                     text: text,
-                    model_id: 'eleven_monolingual_v1',
-                    voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+                    model_id: 'eleven_monolingual_v1', // Or a newer model like eleven_turbo_v2
+                    voice_settings: {
+                        stability: 0.5,
+                        similarity_boost: 0.75,
+                    },
                 },
                 headers: {
                     'Accept': 'audio/mpeg',
                     'xi-api-key': XI_API_KEY,
                     'Content-Type': 'application/json',
                 },
-                // --- THIS IS THE KEY CHANGE ---
-                // We ask for the data as a raw ArrayBuffer instead of a stream.
-                responseType: 'arraybuffer',
+                responseType: 'stream', // We are back to using a stream for speed
             });
 
-            // Set the correct headers and send the audio data buffer back to the client.
+            // Set the content type header so the browser knows it's an audio file
             res.setHeader('Content-Type', 'audio/mpeg');
-            res.send(response.data);
+
+            // Pipe the audio stream from ElevenLabs directly to the browser response.
+            // This is the key to low-latency playback.
+            response.data.pipe(res);
 
         } catch (error) {
-            // Log a more helpful error message
             const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
-            console.error('Error from ElevenLabs:', errorMessage);
-            res.status(500).send({ message: `Error generating speech: ${errorMessage}` });
+            console.error('Error from ElevenLabs streaming endpoint:', errorMessage);
+            res.status(500).send({ message: `Error generating speech stream: ${errorMessage}` });
         }
 
     } else {
