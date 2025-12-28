@@ -1,0 +1,23 @@
+name: Update Bot Knowledge
+on:
+  push:
+    paths:
+      - 'knowledge/**' # Only runs when files in /knowledge change
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm install @supabase/supabase-js @google/generative-ai
+      - name: Run Ingestion Script
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: node ingest.js
