@@ -2,7 +2,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 module.exports = async (req, res) => {
-    // 1. Better CORS (Allowing your localhost and domain)
+    // 1. Robust CORS Headers
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -10,55 +10,58 @@ module.exports = async (req, res) => {
     if (req.method === 'OPTIONS') return res.status(200).end();
     if (req.method !== 'POST') return res.status(405).end();
     
+    // Set for Chunked Streaming
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Transfer-Encoding', 'chunked');
 
     try {
         const { userInput, history } = req.body;
-        if (!userInput) throw new Error("No user input provided.");
+        if (!userInput) return res.status(400).end("User input required");
 
         const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
         
-        // --- 2025 MODEL UPDATES ---
-        // Gemini 3 Flash is the current state-of-the-art as of Dec 2025
-        const model = genAI.getGenerativeModel({ model: "gemini-3-flash" });
+        // 2. 2025 Stable Model Selection
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
         const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
 
-        // 2. RAG Logic: Fetching your knowledge base from Supabase
+        // 3. RAG Logic: Vector Search
         const { embedding } = await embedModel.embedContent(userInput);
         const { data: documents } = await supabase.rpc('match_documents', {
             query_embedding: embedding.values,
-            match_threshold: 0.3, // Lowered to ensure we always get context
+            match_threshold: 0.4,
             match_count: 3,
         });
 
-        const context = documents?.map(d => d.content).join('\n\n') || "Rohan's general background.";
+        const context = documents?.map(d => d.content).join('\n\n') || "General background of Rohanraje Bhosale.";
 
-        // 3. Start the Chat with History
-        const chat = model.startChat({ 
-            history: history || [] 
-        });
+        // 4. FIX: HISTORY VALIDATION
+        // Gemini requires history to start with 'user'. We filter out any leading 'model' messages.
+        let validHistory = (history || []).filter(item => item.parts && item.parts[0].text.trim() !== "");
+        if (validHistory.length > 0 && validHistory[0].role === 'model') {
+            validHistory.shift(); 
+        }
 
-        const prompt = `
+        const chat = model.startChat({ history: validHistory });
+        
+        const finalPrompt = `
             You are ROHbot, the AI digital twin of Rohanraje Bhosale.
-            Answer based on this context: ${context}
+            Use the provided context to answer as Rohan. 
+            Context: ${context}
             
-            User Question: ${userInput}
+            Question: ${userInput}
         `;
 
-        // 4. Stream the Response
-        const result = await chat.sendMessageStream(prompt);
+        // 5. Streaming Execution
+        const result = await chat.sendMessageStream(finalPrompt);
         for await (const chunk of result.stream) {
-            const chunkText = chunk.text();
-            res.write(chunkText);
+            res.write(chunk.text());
         }
         res.end();
 
     } catch (error) {
         console.error("Backend Error:", error);
-        // This pushes the actual error message to your chat window for debugging
-        res.write(`ERROR_LOG: ${error.message}`);
+        res.write(`ERROR: ${error.message}`);
         res.end();
     }
 };
