@@ -1,32 +1,81 @@
-const axios = require('axios'); // Add this: npm install axios
+const { createClient } = require('@supabase/supabase-js');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+require('dotenv').config(); // Load local .env if running locally
 
-async function ingestGithubProjects() {
-    const GITHUB_USERNAME = "RohanrajeBHosale";
-    console.log("🔍 Scanning GitHub for new projects...");
+// 1. Setup Clients
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
 
+const GITHUB_USERNAME = "RohanrajeBHosale";
+
+async function generateAndUpload(content, source, repoName = null) {
     try {
-        // Fetch your public repos
-        const res = await axios.get(`https://api.github.com/users/${GITHUB_USERNAME}/repos?sort=updated`);
-        const repos = res.data;
+        const result = await embedModel.embedContent(content);
+        const embedding = result.embedding.values;
 
-        for (const repo of repos) {
-            // Only ingest if the repo is tagged with 'portfolio'
-            if (!repo.topics.includes('portfolio')) continue;
+        const { error } = await supabase.from('documents').upsert({
+            content: content,
+            metadata: { source: source, repo: repoName, last_updated: new Date() },
+            embedding: embedding
+        }, { onConflict: 'content' });
 
-            console.log(`📦 Ingesting project: ${repo.name}`);
-            const content = `Project Name: ${repo.name}\nDescription: ${repo.description}\nLink: ${repo.html_url}\nMain Language: ${repo.language}`;
-
-            // Turn this metadata into an embedding and push to Supabase
-            const result = await model.embedContent(content);
-            const embedding = result.embedding.values;
-
-            await supabase.from('documents').upsert({
-                content: content,
-                metadata: { source: 'github-api', repo: repo.name },
-                embedding: embedding
-            }, { onConflict: 'content' }); // Prevents duplicates
-        }
-    } catch (e) {
-        console.error("GitHub API Error:", e.message);
+        if (error) throw error;
+        console.log(`✅ Synced: ${source}`);
+    } catch (err) {
+        console.error(`❌ Failed: ${source}`, err.message);
     }
 }
+
+async function startIngestion() {
+    console.log("🚀 Starting Full Knowledge Update...");
+
+    // PART A: Ingest Local Markdown Files (Personal/Education/Exp)
+    const knowledgeDir = './knowledge';
+    if (fs.existsSync(knowledgeDir)) {
+        const files = fs.readdirSync(knowledgeDir);
+        for (const file of files) {
+            if (file.endsWith('.md')) {
+                const content = fs.readFileSync(path.join(knowledgeDir, file), 'utf8');
+                await generateAndUpload(content, `file:${file}`);
+            }
+        }
+    }
+
+    // PART B: Ingest GitHub Projects (Auto-discovery)
+    console.log("🔍 Scanning GitHub for tagged portfolio projects...");
+    try {
+        // Authenticated request using your new Token
+        const res = await axios.get(
+            `https://api.github.com/search/repositories?q=user:${GITHUB_USERNAME}+topic:portfolio`, 
+            {
+                headers: {
+                    'Authorization': `token ${process.env.GH_PAT}`,
+                    'Accept': 'application/vnd.github.v3+json'
+                }
+            }
+        );
+
+        const repos = res.data.items;
+        for (const repo of repos) {
+            const projectInfo = `
+                Project Name: ${repo.name}
+                Description: ${repo.description || "An AI/Data project by Rohan."}
+                URL: ${repo.html_url}
+                Primary Language: ${repo.language}
+                Topics: ${repo.topics.join(', ')}
+            `.trim();
+
+            await generateAndUpload(projectInfo, 'github-api', repo.name);
+        }
+    } catch (err) {
+        console.error("❌ GitHub API Error:", err.message);
+    }
+
+    console.log("✨ Bot Knowledge is now 100% up to date.");
+}
+
+startIngestion();
