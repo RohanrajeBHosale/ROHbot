@@ -2,94 +2,63 @@ const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 module.exports = async (req, res) => {
-    // 1. UNIVERSAL CORS HANDLER (One block to rule them all)
+    // 1. Better CORS (Allowing your localhost and domain)
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-
-    // Handle Preflight
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
-
-    // Only allow POST
-    if (req.method !== 'POST') {
-        return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
-    }
-
-    // Set streaming headers
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    
+    if (req.method === 'OPTIONS') return res.status(200).end();
+    if (req.method !== 'POST') return res.status(405).end();
+    
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Transfer-Encoding', 'chunked');
 
     try {
         const { userInput, history } = req.body;
-        if (!userInput) {
-            res.write("Error: User input is required.");
-            return res.end();
-        }
+        if (!userInput) throw new Error("No user input provided.");
 
         const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-        // --- MODEL UPDATES FOR LATE 2025 ---
-        // Changed to Gemini 2.0 Flash (The stable 2025 workhorse)
-        const generationModel = genAI.getGenerativeModel({ 
-            model: "gemini-2.0-flash", 
-        });
-
-        // Embedding model (keeping 004 as it is usually stable)
-        const embeddingModel = genAI.getGenerativeModel({ 
-            model: "text-embedding-004" 
-        });
-
-        const chat = generationModel.startChat({
-            history: history || [],
-        });
-
-        // 2. RAG PIPELINE: Query Rewriting
-        const rewritePrompt = `Rewrite the user's query to be a concise search term for a vector database... Query: "${userInput}"`;
-        const rewriteResult = await generationModel.generateContent(rewritePrompt);
-        const rewrittenQuery = (await rewriteResult.response.text()).trim();
         
-        // 3. RAG PIPELINE: Vector Search
-        const { embedding } = await embeddingModel.embedContent(rewrittenQuery);
-        const { data: documents, error } = await supabase.rpc('match_documents', {
+        // --- 2025 MODEL UPDATES ---
+        // Gemini 3 Flash is the current state-of-the-art as of Dec 2025
+        const model = genAI.getGenerativeModel({ model: "gemini-3-flash" });
+        const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+
+        // 2. RAG Logic: Fetching your knowledge base from Supabase
+        const { embedding } = await embedModel.embedContent(userInput);
+        const { data: documents } = await supabase.rpc('match_documents', {
             query_embedding: embedding.values,
-            match_threshold: 0.50, // Slightly lowered to ensure we get context
-            match_count: 5,
+            match_threshold: 0.3, // Lowered to ensure we always get context
+            match_count: 3,
         });
 
-        if (error) throw new Error(`Supabase RPC error: ${error.message}`);
-        
-        const contextText = documents && documents.length > 0 
-            ? documents.map(doc => doc.content).join('\n\n') 
-            : "No specific background found in knowledge base.";
+        const context = documents?.map(d => d.content).join('\n\n') || "Rohan's general background.";
 
-        const finalPrompt = `
+        // 3. Start the Chat with History
+        const chat = model.startChat({ 
+            history: history || [] 
+        });
+
+        const prompt = `
             You are ROHbot, the AI digital twin of Rohanraje Bhosale.
-            Use the following context to answer the user accurately. 
-            If the answer isn't in the context, use your general knowledge but stay in character.
+            Answer based on this context: ${context}
             
-            CONTEXT FROM ROHAN'S KNOWLEDGE BASE:
-            ${contextText}
-            
-            USER'S QUESTION:
-            "${userInput}"
+            User Question: ${userInput}
         `;
 
-        // 4. STREAMING RESPONSE
-        const result = await chat.sendMessageStream(finalPrompt);
-
+        // 4. Stream the Response
+        const result = await chat.sendMessageStream(prompt);
         for await (const chunk of result.stream) {
             const chunkText = chunk.text();
-            res.write(chunkText); // Push chunk to the portfolio UI
+            res.write(chunkText);
         }
-        
         res.end();
 
     } catch (error) {
-        console.error("Error in RAG streaming pipeline:", error);
-        // Provide the specific error to the UI for easier debugging
-        res.write(`Error: ${error.message || "I'm having trouble connecting to my core logic."}`);
-        res.end()
+        console.error("Backend Error:", error);
+        // This pushes the actual error message to your chat window for debugging
+        res.write(`ERROR_LOG: ${error.message}`);
+        res.end();
+    }
+};
