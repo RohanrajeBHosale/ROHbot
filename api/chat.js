@@ -1,42 +1,28 @@
-export default async function handler(req, res) {
-  // Allow your portfolio to talk to this API
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*'); // Allows all websites to talk to it
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
-  );
-
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
-
-  // ... your existing Gemini / Supabase code below ...
-}
-
-// api/chat.js
 const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 module.exports = async (req, res) => {
-    // Standard CORS and method handling
+    // 1. UNIVERSAL CORS HANDLER (One block to rule them all)
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    if (req.method === 'OPTIONS') return res.status(200).end();
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
 
-    if (req.method !== 'POST') {
-        res.setHeader('Allow', ['POST', 'OPTIONS']);
-        return res.status(405).end(`Method ${req.method} Not Allowed`);
+    // Handle Preflight
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
     }
-    
+
+    // Only allow POST
+    if (req.method !== 'POST') {
+        return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
+    }
+
+    // Set streaming headers
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Transfer-Encoding', 'chunked');
 
     try {
-        // UPDATED: Receive history from the request body
         const { userInput, history } = req.body;
         if (!userInput) {
             res.write("Error: User input is required.");
@@ -45,59 +31,65 @@ module.exports = async (req, res) => {
 
         const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
 
-        // The generation model is now initialized with history
+        // --- MODEL UPDATES FOR LATE 2025 ---
+        // Changed to Gemini 2.0 Flash (The stable 2025 workhorse)
         const generationModel = genAI.getGenerativeModel({ 
-            model: "gemini-1.5-flash",
+            model: "gemini-2.0-flash", 
+        });
+
+        // Embedding model (keeping 004 as it is usually stable)
+        const embeddingModel = genAI.getGenerativeModel({ 
+            model: "text-embedding-004" 
         });
 
         const chat = generationModel.startChat({
-            history: history || [], // <-- Use the provided history
+            history: history || [],
         });
 
-        // RAG Pipeline
-        const rewritePrompt = `Rewrite the user's query to be a question about "me" or "my" background... Query: "${userInput}"`;
+        // 2. RAG PIPELINE: Query Rewriting
+        const rewritePrompt = `Rewrite the user's query to be a concise search term for a vector database... Query: "${userInput}"`;
         const rewriteResult = await generationModel.generateContent(rewritePrompt);
         const rewrittenQuery = (await rewriteResult.response.text()).trim();
         
+        // 3. RAG PIPELINE: Vector Search
         const { embedding } = await embeddingModel.embedContent(rewrittenQuery);
         const { data: documents, error } = await supabase.rpc('match_documents', {
             query_embedding: embedding.values,
-            match_threshold: 0.70,
+            match_threshold: 0.50, // Slightly lowered to ensure we get context
             match_count: 5,
         });
 
         if (error) throw new Error(`Supabase RPC error: ${error.message}`);
         
-        const contextText = documents && documents.length > 0 ? documents.map(doc => doc.content).join('\n\n') : "No relevant context found.";
+        const contextText = documents && documents.length > 0 
+            ? documents.map(doc => doc.content).join('\n\n') 
+            : "No specific background found in knowledge base.";
 
         const finalPrompt = `
-            You are ROHbot, an AI assistant for Rohanraje Bhosale... (rest of your detailed prompt)
-            ---
-            CONTEXT:
+            You are ROHbot, the AI digital twin of Rohanraje Bhosale.
+            Use the following context to answer the user accurately. 
+            If the answer isn't in the context, use your general knowledge but stay in character.
+            
+            CONTEXT FROM ROHAN'S KNOWLEDGE BASE:
             ${contextText}
-            ---
+            
             USER'S QUESTION:
             "${userInput}"
-            ---
-            INSTRUCTION:
-            Based on the context AND the conversation history, formulate a comprehensive answer...
         `;
 
-        // Use the chat session to send the new message
+        // 4. STREAMING RESPONSE
         const result = await chat.sendMessageStream(finalPrompt);
 
         for await (const chunk of result.stream) {
             const chunkText = chunk.text();
-            res.write(chunkText);
+            res.write(chunkText); // Push chunk to the portfolio UI
         }
         
         res.end();
 
     } catch (error) {
         console.error("Error in RAG streaming pipeline:", error);
-        res.write("Error: I'm having trouble connecting to my core logic right now.");
-        res.end();
-    }
-};
+        // Provide the specific error to the UI for easier debugging
+        res.write(`Error: ${error.message || "I'm having trouble connecting to my core logic."}`);
+        res.end()
