@@ -2,6 +2,8 @@
 
 ROHbot is an LLM-powered assistant that answers questions about my work using **retrieval-augmented generation (RAG)** and a production-style API layer (grounding, citations, eval hooks). This repo is structured to reflect **real system design**, not a demo notebook.
 
+Design goal: prioritize factual correctness and debuggability over creative generation.
+
 **Live:** https://rohbot.vercel.app
 
 ---
