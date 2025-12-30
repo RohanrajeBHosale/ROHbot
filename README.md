@@ -25,6 +25,10 @@ Docs:
 - Evaluation: `docs/evaluation.md`
 
 ---
+## Data policy
+`knowledge/` contains **public-only** knowledge sources used for retrieval.
+No private documents or secrets are committed to this repository.
+---
 
 ## Quickstart (local)
 ### 1) Setup
