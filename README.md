@@ -2,7 +2,7 @@
 
 ROHbot is an LLM-powered assistant that answers questions about my work using **RAG** (retrieval + grounding) and an API layer deployable to Vercel.
 
-Live: https://rohbot.vercel.app
+Live: https://www.rohanraje.com
 
 ## What it does
 - Ingests portfolio content into a knowledge base
