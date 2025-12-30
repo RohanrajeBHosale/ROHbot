@@ -133,4 +133,5 @@ Roadmap (realistic)
 	•	Add caching (embeddings + responses) to reduce latency
 
 ⸻
-
+## License
+MIT — see LICENSE for details.
