@@ -5,6 +5,12 @@
   "main": "api/chat.js",
   "scripts": {
     "start": "node api/chat.js"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "ingest": "node ingest.js",
+    "eval": "node eval.js",
+    "lint": "next lint"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
@@ -13,4 +19,5 @@
     "dotenv": "^16.4.5",
     "groq-sdk": "^0.9.0"
   }
+  
 }
