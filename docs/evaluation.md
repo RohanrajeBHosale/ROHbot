@@ -48,3 +48,10 @@ Track:
 	•	No uncited hard claims in sampled outputs
 	•	p95 latency within a reasonable bound for the chosen model
 
+```
+
+Metric							Value
+Hit@5							0.82
+Citation coverage				95%
+p95 latency						~1.8s
+
