@@ -6,8 +6,10 @@
   "scripts": {
   "build": "echo \"no build\"",
   "dev": "vercel dev",
-  "start": "vercel dev"
-}
+  "start": "vercel dev",
+  "ingest": "node ingest.js",
+  "eval": "node eval.js"
+    }
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
     "@supabase/supabase-js": "^2.45.0",
