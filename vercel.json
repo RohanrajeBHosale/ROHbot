@@ -4,3 +4,11 @@
     { "source": "/api/tts", "destination": "/api/tts.js" }
   ]
 }
+
+{
+  "functions": {
+    "api/*.js": {
+      "runtime": "nodejs18.x"
+    }
+  }
+}
