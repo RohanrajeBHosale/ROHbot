@@ -10,16 +10,11 @@ const ALLOWED_ORIGINS = new Set([
 function setCors(req, res) {
   const origin = req.headers.origin;
 
-  // If request comes from an allowed origin, echo it back
   if (origin && ALLOWED_ORIGINS.has(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
-  } else {
-    // Optional: allow no-origin (curl/postman) without failing
-    // If you want to be strict, remove this else block.
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Vary", "Origin");
   }
 
-  res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader("Access-Control-Max-Age", "86400");
