@@ -1,25 +1,20 @@
 {
-  "name": "rohbot-backend",
+  "name": "rohbot-functions",
   "version": "1.0.0",
-  "description": "Backend for ROHbot TTS and Chat",
   "private": true,
+  "type": "commonjs",
   "scripts": {
-  "build": "echo \"no build\"",
-  "dev": "vercel dev",
-  "start": "vercel dev",
-  "ingest": "node ingest.js",
-  "eval": "node eval.js"
-    }
+    "build": "echo \"no build\"",
+    "dev": "vercel dev",
+    "start": "vercel dev",
+    "ingest": "node ingest.js"
+  },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
     "@supabase/supabase-js": "^2.45.0",
-    "@upstash/redis": "^1.34.0",
-    "@upstash/ratelimit": "^1.0.0",
-    "axios": "^1.7.2",
+    "@upstash/ratelimit": "^2.0.5",
+    "@upstash/redis": "^1.34.3",
     "dotenv": "^16.4.5",
-    "groq-sdk": "^0.9.0",
-    "next": "14.2.5",
-    "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "groq-sdk": "^0.9.0"
   }
 }
