@@ -1,8 +1,5 @@
-// ROHbot/api/chat.js
-const { createClient } = require("@supabase/supabase-js");
-const { GoogleGenerativeAI, FunctionDeclarationSchemaType } = require("@google/generative-ai");
+// /api/chat.js
 
-// ---------- CORS ----------
 const ALLOWED_ORIGINS = new Set([
   "https://rohanraje.com",
   "https://www.rohanraje.com",
@@ -13,7 +10,6 @@ const ALLOWED_ORIGINS = new Set([
 function setCors(req, res) {
   const origin = req.headers.origin;
 
-  // IMPORTANT: do NOT use "*" for your main site requests
   if (origin && ALLOWED_ORIGINS.has(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
@@ -24,142 +20,99 @@ function setCors(req, res) {
   res.setHeader("Access-Control-Max-Age", "86400");
 }
 
-// ---------- TOOL: Vercel Status (NO axios) ----------
-async function getVercelDeploymentStatus() {
-  try {
-    const token = process.env.VERCEL_API_TOKEN;
-    const projectId = process.env.VERCEL_PROJECT_ID;
-
-    if (!token || !projectId) {
-      return { status: "unknown", error: "Missing VERCEL_API_TOKEN or VERCEL_PROJECT_ID" };
-    }
-
-    const r = await fetch(
-      `https://api.vercel.com/v6/deployments?projectId=${projectId}&limit=1`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-
-    if (!r.ok) {
-      const t = await r.text().catch(() => "");
-      return { status: "unknown", error: `Vercel API error ${r.status}: ${t}` };
-    }
-
-    const data = await r.json();
-    const latest = data?.deployments?.[0];
-    return { status: latest?.state || "unknown" };
-  } catch (e) {
-    return { status: "unknown", error: "Could not fetch deployment status" };
-  }
-}
-
-// ---------- TOOL SCHEMA (Gemini function calling) ----------
-const tools = [
-  {
-    functionDeclarations: [
-      {
-        name: "getVercelDeploymentStatus",
-        description:
-          "Gets the current live deployment status of the ROHbot project from Vercel to see if it is online and ready.",
-        parameters: {
-          type: FunctionDeclarationSchemaType.OBJECT,
-          properties: {},
-          required: [],
-        },
-      },
-    ],
-  },
-];
-
-// ---------- HANDLER ----------
 module.exports = async (req, res) => {
   setCors(req, res);
 
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
 
-  // Return text so your existing frontend streaming reader works.
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-
   try {
     const { userInput, history } = req.body || {};
-    const question = (userInput || "").trim();
-    if (!question) {
-      res.status(400).write("Missing userInput");
-      return res.end();
-    }
+    const clean = String(userInput || "").trim();
+    if (!clean) return res.status(400).json({ error: "Missing userInput" });
 
-    const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const groqKey = process.env.GROQ_API_KEY;
+    if (!groqKey) return res.status(500).json({ error: "Missing GROQ_API_KEY" });
 
-    // ✅ FIX: use a model id that exists for your API version
-    // gemini-1.5-flash-latest / gemini-1.5-flash-002 are commonly listed.  [oai_citation:1‡Google AI Developers Forum](https://discuss.ai.google.dev/t/imagen-model-not-found-in-python-google-generative-ai/46547?utm_source=chatgpt.com)
-    const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-flash-latest",
-      tools,
+    // Convert your Gemini-style history -> OpenAI/Groq messages
+    // history item format you used: { role: 'user'|'model', parts:[{text}] }
+    const msgs = [];
+    msgs.push({
+      role: "system",
+      content:
+        "You are ROHbot, Rohan's portfolio assistant. Answer concisely, confidently, and grounded in his projects. If unsure, ask a clarifying question.",
     });
 
-    const chat = model.startChat({ history: history || [] });
-
-    // RAG retrieval
-    const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
-    const { embedding } = await embedModel.embedContent(question);
-
-    const { data: documents } = await supabase.rpc("match_documents", {
-      query_embedding: embedding.values,
-      match_threshold: 0.7,
-      match_count: 3,
-    });
-
-    const contextText =
-      documents && documents.length
-        ? documents.map((d) => d.content).join("\n\n")
-        : "No relevant context found.";
-
-    const finalPrompt = `
-You are ROHbot, Rohan's portfolio assistant.
-Answer briefly, clearly, and grounded in the provided CONTEXT.
-If the user asks about whether ROHbot is online / deployment status, call getVercelDeploymentStatus.
-
----
-CONTEXT:
-${contextText}
----
-USER:
-${question}
-`.trim();
-
-    // 1) Ask model (non-stream) so we can detect function calls reliably
-    const result = await chat.sendMessage(finalPrompt);
-    const response = result.response;
-    const functionCall = response.functionCalls?.()?.[0];
-
-    // 2) If tool called, execute and send tool result back
-    if (functionCall) {
-      let toolResult = { error: "Unknown tool called" };
-
-      if (functionCall.name === "getVercelDeploymentStatus") {
-        toolResult = await getVercelDeploymentStatus();
+    if (Array.isArray(history)) {
+      for (const h of history) {
+        const role = h?.role === "user" ? "user" : "assistant";
+        const text = h?.parts?.[0]?.text || "";
+        if (String(text).trim()) msgs.push({ role, content: String(text) });
       }
-
-      const result2 = await chat.sendMessage([
-        {
-          functionResponse: {
-            name: functionCall.name,
-            response: toolResult,
-          },
-        },
-      ]);
-
-      res.status(200).write(result2.response.text());
-      return res.end();
     }
 
-    // 3) Otherwise just return the answer
-    res.status(200).write(response.text());
-    return res.end();
-  } catch (err) {
-    console.error("chat error:", err);
-    res.status(500).write("Error: ROHbot backend failed.");
-    return res.end();
+    msgs.push({ role: "user", content: clean });
+
+    // Stream plain text back (your frontend expects raw chunks)
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Transfer-Encoding", "chunked");
+    res.setHeader("Cache-Control", "no-store");
+
+    const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${groqKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "llama-3.1-70b-versatile", // or "llama-3.1-8b-instant"
+        messages: msgs,
+        temperature: 0.5,
+        stream: true,
+      }),
+    });
+
+    if (!r.ok || !r.body) {
+      const err = await r.text().catch(() => "");
+      console.error("Groq error:", r.status, err);
+      return res.status(500).end("Error: Groq request failed.");
+    }
+
+    // Parse the SSE stream from Groq and write only the text deltas to client
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // Groq sends SSE lines like: "data: {...}\n\n"
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() || "";
+
+      for (const p of parts) {
+        const line = p.trim();
+        if (!line.startsWith("data:")) continue;
+
+        const data = line.slice(5).trim();
+        if (data === "[DONE]") continue;
+
+        try {
+          const json = JSON.parse(data);
+          const delta = json?.choices?.[0]?.delta?.content;
+          if (delta) res.write(delta);
+        } catch {
+          // ignore malformed chunks
+        }
+      }
+    }
+
+    res.end();
+  } catch (e) {
+    console.error("chat error:", e);
+    res.status(500).end("Error: Internal Server Error");
   }
 };
