@@ -1,4 +1,5 @@
-// /api/tts.js
+// api/tts.js
+// ElevenLabs TTS -> returns audio/mpeg
 
 const ALLOWED_ORIGINS = new Set([
   "https://rohanraje.com",
@@ -13,6 +14,8 @@ function setCors(req, res) {
   if (origin && ALLOWED_ORIGINS.has(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
+  } else if (!origin) {
+    res.setHeader("Access-Control-Allow-Origin", "*");
   }
 
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -28,7 +31,7 @@ module.exports = async (req, res) => {
 
   try {
     const { text } = req.body || {};
-    const clean = String(text || "").trim();
+    const clean = (text || "").trim();
     if (!clean) return res.status(400).json({ error: "Missing text" });
 
     const apiKey = process.env.ELEVENLABS_API_KEY;
@@ -37,24 +40,27 @@ module.exports = async (req, res) => {
     if (!apiKey) return res.status(500).json({ error: "Missing ELEVENLABS_API_KEY" });
     if (!voiceId) return res.status(500).json({ error: "Missing ELEVENLABS_VOICE_ID" });
 
-    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`, {
-      method: "POST",
-      headers: {
-        "xi-api-key": apiKey,
-        "Content-Type": "application/json",
-        Accept: "audio/mpeg",
-      },
-      body: JSON.stringify({
-        text: clean,
-        model_id: "eleven_multilingual_v2",
-        voice_settings: {
-          stability: 0.4,
-          similarity_boost: 0.75,
-          style: 0.2,
-          use_speaker_boost: true,
+    const r = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
+      {
+        method: "POST",
+        headers: {
+          "xi-api-key": apiKey,
+          "Content-Type": "application/json",
+          Accept: "audio/mpeg",
         },
-      }),
-    });
+        body: JSON.stringify({
+          text: clean,
+          model_id: "eleven_multilingual_v2",
+          voice_settings: {
+            stability: 0.4,
+            similarity_boost: 0.75,
+            style: 0.25,
+            use_speaker_boost: true,
+          },
+        }),
+      }
+    );
 
     if (!r.ok) {
       const errText = await r.text().catch(() => "");
@@ -65,9 +71,9 @@ module.exports = async (req, res) => {
     const audio = Buffer.from(await r.arrayBuffer());
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Cache-Control", "no-store");
-    res.status(200).send(audio);
+    return res.status(200).send(audio);
   } catch (e) {
-    console.error("tts error:", e);
-    res.status(500).json({ error: "Internal Server Error" });
+    console.error("api/tts error:", e);
+    return res.status(500).json({ error: "Internal Server Error" });
   }
 };
