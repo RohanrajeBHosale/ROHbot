@@ -1,130 +1,197 @@
 // api/chat.js
-// Groq streaming chat endpoint (OpenAI-compatible)
-// Works as a Vercel Serverless Function (/api/chat)
+
+const { createClient } = require('@supabase/supabase-js');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const OpenAI = require('openai');
 
 const ALLOWED_ORIGINS = new Set([
-  "https://rohanraje.com",
-  "https://www.rohanraje.com",
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
+  'https://rohanraje.com',
+  'https://www.rohanraje.com',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
 ]);
 
 function setCors(req, res) {
   const origin = req.headers.origin;
-
-  // If browser origin is allowed, echo it back (best practice)
   if (origin && ALLOWED_ORIGINS.has(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
-  } else if (!origin) {
-    // no-origin requests (curl/postman)
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
   }
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.setHeader("Access-Control-Max-Age", "86400");
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Max-Age', '86400');
+}
+
+function safeJsonParse(body) {
+  try {
+    return typeof body === 'string' ? JSON.parse(body) : body;
+  } catch {
+    return null;
+  }
+}
+
+async function getVercelDeploymentStatus() {
+  const token = process.env.VERCEL_API_TOKEN;
+  const projectId = process.env.VERCEL_PROJECT_ID;
+  if (!token || !projectId) return { status: 'unknown', error: 'Vercel env vars missing' };
+
+  const r = await fetch(`https://api.vercel.com/v6/deployments?projectId=${projectId}&limit=1`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!r.ok) return { status: 'unknown', error: `Vercel API error ${r.status}` };
+
+  const data = await r.json();
+  const latest = data?.deployments?.[0];
+  return { status: latest?.state || 'unknown' };
 }
 
 module.exports = async (req, res) => {
   setCors(req, res);
 
-  if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+
+  // Stream plain text
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Transfer-Encoding', 'chunked');
 
   try {
-    const { userInput, history } = req.body || {};
-    const clean = (userInput || "").trim();
-    if (!clean) return res.status(400).json({ error: "Missing userInput" });
+    const body = safeJsonParse(req.body) || {};
+    const userInput = String(body.userInput || '').trim();
+    const history = Array.isArray(body.history) ? body.history : [];
 
-    const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) return res.status(500).json({ error: "Missing GROQ_API_KEY" });
-
-    // ✅ Use a supported Groq model (the one you used is decommissioned)
-    // Docs show llama-3.3-70b-versatile as current example.  [oai_citation:1‡GroqCloud](https://console.groq.com/docs/quickstart?utm_source=chatgpt.com)
-    const model = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
-
-    // Convert your stored Gemini-like history to OpenAI-style messages if needed.
-    // Your client sends history as: [{role:'user'|'model', parts:[{text}]}]
-    const messages = [];
-
-    if (Array.isArray(history)) {
-      for (const h of history) {
-        const role = h?.role === "user" ? "user" : "assistant";
-        const text = h?.parts?.[0]?.text;
-        if (text) messages.push({ role, content: String(text) });
-      }
+    if (!userInput) {
+      res.write('Please ask a question.');
+      return res.end();
     }
 
-    messages.push({ role: "user", content: clean });
+    // --- Supabase client ---
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+    if (!supabaseUrl || !supabaseKey) {
+      res.write('Server misconfigured: missing Supabase env vars.');
+      return res.end();
+    }
+    const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Stream back plain text (your client reads res.body as a stream)
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Transfer-Encoding", "chunked");
+    // --- Embedding via Gemini (ONLY embeddings) ---
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (!geminiKey) {
+      res.write('Server misconfigured: missing GEMINI_API_KEY (needed for embeddings).');
+      return res.end();
+    }
+    const genAI = new GoogleGenerativeAI(geminiKey);
+    const embedModel = genAI.getGenerativeModel({ model: 'text-embedding-004' });
 
-    const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: 0.35,
-        stream: true,
-      }),
+    const embedResp = await embedModel.embedContent(userInput);
+    const queryVec = embedResp?.embedding?.values;
+    if (!Array.isArray(queryVec)) {
+      res.write('Embedding failed.');
+      return res.end();
+    }
+
+    // --- Retrieve KB context ---
+    const { data: docs, error: matchErr } = await supabase.rpc('match_documents', {
+      query_embedding: queryVec,
+      match_threshold: 0.72,
+      match_count: 5,
     });
 
-    if (!groqRes.ok || !groqRes.body) {
-      const t = await groqRes.text().catch(() => "");
-      console.error("Groq error:", groqRes.status, t);
-      return res.status(500).end("Snag in the connection.");
+    if (matchErr) console.error('match_documents error:', matchErr);
+
+    const contextText =
+      Array.isArray(docs) && docs.length
+        ? docs
+            .map((d, i) => `[#${i + 1}] ${String(d.content || '').trim()}`)
+            .filter(Boolean)
+            .join('\n\n')
+        : '';
+
+    // --- Hard rule: if no KB context, do NOT hallucinate ---
+    const ragGuard =
+      contextText.length === 0
+        ? `No relevant context was found in Rohan's knowledge base. You MUST say you don't have enough info and ask a follow-up question. Do NOT provide generic explanations.`
+        : `Use ONLY the provided CONTEXT as your source of truth. If the answer is not in the context, say you don't know and ask what to add.`;
+
+    // --- Tool-like behavior (simple, deterministic) ---
+    const wantsStatus =
+      /deployment|deploy|vercel|status|online|down|uptime/i.test(userInput) ||
+      /are you live|are you working/i.test(userInput);
+
+    let toolResult = null;
+    if (wantsStatus) toolResult = await getVercelDeploymentStatus();
+
+    // --- Groq (OpenAI compatible) ---
+    const groqKey = process.env.GROQ_API_KEY;
+    if (!groqKey) {
+      res.write('Server misconfigured: missing GROQ_API_KEY.');
+      return res.end();
     }
 
-    // Groq streams SSE: lines like "data: {...}\n\n"
-    const reader = groqRes.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
+    const groq = new OpenAI({
+      apiKey: groqKey,
+      baseURL: 'https://api.groq.com/openai/v1',
+    });
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    // Model: use a currently supported Groq production model
+    // llama-3.3-70b-versatile is listed on Groq supported models page.  [oai_citation:1‡GroqCloud](https://console.groq.com/docs/models)
+    const MODEL = 'llama-3.3-70b-versatile';
 
-      buffer += decoder.decode(value, { stream: true });
+    const system = `
+You are ROHbot — Rohanraje Bhosale's portfolio assistant.
+Style rules:
+- Be concise, specific, and factual.
+- No generic textbook explanations.
+- Prefer bullet points.
+- If the user asks about "your projects", interpret it as Rohan's projects from the KB.
 
-      // Process complete SSE events separated by \n\n
-      const events = buffer.split("\n\n");
-      buffer = events.pop() || "";
+RAG RULE:
+${ragGuard}
 
-      for (const evt of events) {
-        const lines = evt.split("\n");
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith("data:")) continue;
+If a TOOL_RESULT is provided, use it.
+`;
 
-          const data = trimmed.slice(5).trim();
+    const userMsg = `
+CONTEXT:
+${contextText || '(empty)'}
 
-          if (data === "[DONE]") {
-            res.end();
-            return;
-          }
+TOOL_RESULT:
+${toolResult ? JSON.stringify(toolResult) : '(none)'}
 
-          try {
-            const json = JSON.parse(data);
-            const delta = json?.choices?.[0]?.delta?.content;
-            if (delta) res.write(delta);
-          } catch {
-            // ignore malformed chunks
-          }
-        }
-      }
+USER QUESTION:
+${userInput}
+`;
+
+    // Build messages for Groq
+    const groqMessages = [
+      { role: 'system', content: system },
+      ...history
+        .filter((m) => m && m.role && m.content)
+        .slice(-12)
+        .map((m) => ({
+          role: m.role === 'assistant' ? 'assistant' : 'user',
+          content: String(m.content),
+        })),
+      { role: 'user', content: userMsg },
+    ];
+
+    const stream = await groq.chat.completions.create({
+      model: MODEL,
+      messages: groqMessages,
+      temperature: 0.2,
+      stream: true,
+    });
+
+    for await (const part of stream) {
+      const delta = part?.choices?.[0]?.delta?.content;
+      if (delta) res.write(delta);
     }
 
-    res.end();
-  } catch (err) {
-    console.error("api/chat error:", err);
-    res.status(500).end("Snag in the connection.");
+    return res.end();
+  } catch (e) {
+    console.error('api/chat fatal:', e);
+    res.write('Error: ROHbot backend crashed. Check Vercel function logs.');
+    return res.end();
   }
 };
