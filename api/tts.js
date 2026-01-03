@@ -1,4 +1,4 @@
-// api/tts.js
+// ROHbot/api/tts.js
 
 const ALLOWED_ORIGINS = new Set([
   "https://rohanraje.com",
@@ -20,7 +20,7 @@ function setCors(req, res) {
   res.setHeader("Access-Control-Max-Age", "86400");
 }
 
-export default async function handler(req, res) {
+module.exports = async (req, res) => {
   setCors(req, res);
 
   if (req.method === "OPTIONS") return res.status(200).end();
@@ -74,4 +74,4 @@ export default async function handler(req, res) {
     console.error("tts error:", e);
     return res.status(500).json({ error: "Internal Server Error" });
   }
-}
+};
