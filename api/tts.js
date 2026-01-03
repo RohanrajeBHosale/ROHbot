@@ -20,15 +20,14 @@ function setCors(req, res) {
   res.setHeader("Access-Control-Max-Age", "86400");
 }
 
-module.exports = async (req, res) => {
+module.exports = async function handler(req, res) {
   setCors(req, res);
 
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
 
   try {
-    const { text } = req.body || {};
-    const clean = (text || "").trim();
+    const clean = String(req.body?.text || "").trim();
     if (!clean) return res.status(400).json({ error: "Missing text" });
 
     const apiKey = process.env.ELEVENLABS_API_KEY;
@@ -44,7 +43,7 @@ module.exports = async (req, res) => {
         headers: {
           "xi-api-key": apiKey,
           "Content-Type": "application/json",
-          "Accept": "audio/mpeg",
+          Accept: "audio/mpeg",
         },
         body: JSON.stringify({
           text: clean,
@@ -60,16 +59,15 @@ module.exports = async (req, res) => {
     );
 
     if (!r.ok) {
-      const errText = await r.text().catch(() => "");
-      console.error("ElevenLabs TTS error:", r.status, errText);
+      const t = await r.text().catch(() => "");
+      console.error("ElevenLabs error:", r.status, t);
       return res.status(500).json({ error: "ElevenLabs failed" });
     }
 
-    const audio = Buffer.from(await r.arrayBuffer());
+    const audioBuf = Buffer.from(await r.arrayBuffer());
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Cache-Control", "no-store");
-    return res.status(200).send(audio);
-
+    return res.status(200).send(audioBuf);
   } catch (e) {
     console.error("tts error:", e);
     return res.status(500).json({ error: "Internal Server Error" });
