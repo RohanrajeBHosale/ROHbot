@@ -1,5 +1,4 @@
-// ROHbot/api/tts.js
-export const config = { runtime: "nodejs" };
+// api/tts.js
 
 const ALLOWED_ORIGINS = new Set([
   "https://rohanraje.com",
@@ -10,10 +9,12 @@ const ALLOWED_ORIGINS = new Set([
 
 function setCors(req, res) {
   const origin = req.headers.origin;
+
   if (origin && ALLOWED_ORIGINS.has(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
   }
+
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader("Access-Control-Max-Age", "86400");
@@ -36,50 +37,41 @@ export default async function handler(req, res) {
     if (!apiKey) return res.status(500).json({ error: "Missing ELEVENLABS_API_KEY" });
     if (!voiceId) return res.status(500).json({ error: "Missing ELEVENLABS_VOICE_ID" });
 
-    const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`;
-
-    const r = await fetch(url, {
-      method: "POST",
-      headers: {
-        "xi-api-key": apiKey,
-        "Content-Type": "application/json",
-        "Accept": "audio/mpeg",
-      },
-      body: JSON.stringify({
-        text: clean,
-        model_id: "eleven_multilingual_v2",
-        voice_settings: {
-          stability: 0.4,
-          similarity_boost: 0.75,
-          style: 0.25,
-          use_speaker_boost: true,
+    const r = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
+      {
+        method: "POST",
+        headers: {
+          "xi-api-key": apiKey,
+          "Content-Type": "application/json",
+          "Accept": "audio/mpeg",
         },
-      }),
-    });
+        body: JSON.stringify({
+          text: clean,
+          model_id: "eleven_multilingual_v2",
+          voice_settings: {
+            stability: 0.4,
+            similarity_boost: 0.75,
+            style: 0.25,
+            use_speaker_boost: true,
+          },
+        }),
+      }
+    );
 
-    // ❌ If ElevenLabs fails, return the actual status + body so we can debug
     if (!r.ok) {
-      const ct = r.headers.get("content-type") || "";
-      const body = ct.includes("application/json")
-        ? await r.json().catch(() => ({}))
-        : await r.text().catch(() => "");
-
-      console.error("ElevenLabs error:", r.status, body);
-      return res.status(r.status).json({
-        error: "ElevenLabs request failed",
-        status: r.status,
-        details: body,
-      });
+      const errText = await r.text().catch(() => "");
+      console.error("ElevenLabs TTS error:", r.status, errText);
+      return res.status(500).json({ error: "ElevenLabs failed" });
     }
 
-    // ✅ Success: send mp3
-    const audioBuffer = Buffer.from(await r.arrayBuffer());
+    const audio = Buffer.from(await r.arrayBuffer());
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Cache-Control", "no-store");
-    return res.status(200).send(audioBuffer);
+    return res.status(200).send(audio);
 
   } catch (e) {
     console.error("tts error:", e);
-    return res.status(500).json({ error: "Internal Server Error", details: String(e?.message || e) });
+    return res.status(500).json({ error: "Internal Server Error" });
   }
 }
