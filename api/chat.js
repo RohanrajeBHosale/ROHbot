@@ -184,14 +184,19 @@ async function streamGroqChat({ res, model, messages }) {
   }
 
   const reader = r.body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder(); // Default is UTF-8, which is usually correct
   let buffer = "";
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
+    // Decode the chunk immediately
+    const decodedChunk = decoder.decode(value, { stream: true });
+    buffer += decodedChunk;
+
+    // Log each decoded chunk as it comes from Groq
+    console.log("GROQ STREAM CHUNK:", decodedChunk); // <-- NEW LOG
 
     // Groq streams as SSE-like "data: {...}\n\n"
     const parts = buffer.split("\n\n");
@@ -206,7 +211,10 @@ async function streamGroqChat({ res, model, messages }) {
 
       const json = safeJsonParse(payload);
       const delta = json?.choices?.[0]?.delta?.content;
-      if (delta) res.write(delta);
+      if (delta) {
+          console.log("GROQ DELTA CONTENT:", delta); // <-- NEW LOG
+          res.write(delta);
+      }
     }
   }
 }
@@ -243,6 +251,10 @@ module.exports = async (req, res) => {
     const { mode, docs } = await retrieveContext(supabase, question);
     const contextText = formatContext(docs);
 
+    console.log("--- Retrieved Context (before LLM) ---"); // <-- NEW LOG
+    console.log(contextText);                                // <-- NEW LOG
+    console.log("---------------------------------------"); // <-- NEW LOG
+
     // Force grounding (no generic "as an AI model" answers)
     const system = {
       role: "system",
@@ -269,6 +281,11 @@ ${question}
 
     const prior = toOpenAIMessages(history);
 
+    const messagesToSend = [system, ...prior, user];
+    console.log("--- Full Messages Sent to Groq LLM ---"); // <-- NEW LOG
+    messagesToSend.forEach((msg, idx) => console.log(`[${idx}] ${msg.role}: ${msg.content}`)); // <-- NEW LOG
+    console.log("--------------------------------------"); // <-- NEW LOG
+
     // Choose a Groq model that is NOT decommissioned
     // Good defaults:
     // - llama-3.1-8b-instant (fast + cheap)
@@ -278,7 +295,7 @@ ${question}
     await streamGroqChat({
       res,
       model,
-      messages: [system, ...prior, user],
+      messages: messagesToSend,
     });
 
     return res.end();
