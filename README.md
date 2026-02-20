@@ -1,4 +1,4 @@
-# ROHbot — Production-Grade Portfolio RAG Assistant (LLMs + RAG + Agents)
+# ROHbot - Production-Grade Portfolio RAG Assistant (LLMs + RAG + Agents)
 
 ROHbot is an LLM-powered assistant that answers questions about my work using **retrieval-augmented generation (RAG)** and a production-style API layer (grounding, citations, eval hooks). This repo is structured to reflect **real system design**, not a demo notebook.
 
